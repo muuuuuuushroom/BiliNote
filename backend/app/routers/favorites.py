@@ -1,3 +1,4 @@
+import logging
 import re
 from urllib.parse import parse_qs, urlparse
 
@@ -11,12 +12,76 @@ from app.utils.response import ResponseWrapper as R
 router = APIRouter()
 
 FAVORITE_API = "https://api.bilibili.com/x/v3/fav/resource/list"
+VIDEO_INFO_API = "https://api.bilibili.com/x/web-interface/view"
 PAGE_SIZE = 20
+logger = logging.getLogger(__name__)
 
 
 class FavoritePageRequest(BaseModel):
     favorite_url: str = Field(min_length=1, max_length=2048)
     page: int = Field(default=1, ge=1, le=10000)
+
+
+def _page_count(media: dict) -> int:
+    try:
+        return max(int(media.get("page") or 1), 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _get_page_titles(bvid: str, headers: dict) -> dict[int, str]:
+    try:
+        response = httpx.get(VIDEO_INFO_API, params={"bvid": bvid}, headers=headers, timeout=20.0)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("读取 Bilibili 分 P 标题失败 (%s): %s", bvid, exc)
+        return {}
+
+    if payload.get("code") != 0:
+        logger.warning("读取 Bilibili 分 P 标题失败 (%s): %s", bvid, payload.get("message") or payload.get("msg"))
+        return {}
+
+    titles = {}
+    for page in (payload.get("data") or {}).get("pages") or []:
+        try:
+            page_number = int(page.get("page"))
+        except (TypeError, ValueError):
+            continue
+        title = (page.get("part") or "").strip()
+        if title:
+            titles[page_number] = title
+    return titles
+
+
+def _expand_media(media: dict, page_titles: dict[int, str] | None = None) -> list[dict]:
+    bvid = media.get("bvid")
+    if not bvid:
+        return []
+
+    page_count = _page_count(media)
+    base = {
+        "bvid": bvid,
+        "title": media.get("title") or "无标题视频",
+        "cover": media.get("cover") or "",
+        "duration": media.get("duration") or 0,
+        "uploader": (media.get("upper") or {}).get("name") or "",
+        "page_count": page_count,
+    }
+    if page_count == 1:
+        return [{
+            **base,
+            "video_key": bvid,
+            "video_url": f"https://www.bilibili.com/video/{bvid}",
+        }]
+
+    return [{
+        **base,
+        "video_key": f"{bvid}_p{page_number}",
+        "title": (page_titles or {}).get(page_number) or base["title"],
+        "page_number": page_number,
+        "video_url": f"https://www.bilibili.com/video/{bvid}?p={page_number}",
+    } for page_number in range(1, page_count + 1)]
 
 
 def parse_favorite_id(value: str) -> str:
@@ -91,17 +156,9 @@ def get_bilibili_favorite_page(data: FavoritePageRequest):
     medias = data_payload.get("medias") or []
     videos = []
     for media in medias:
-        bvid = media.get("bvid")
-        if not bvid:
-            continue
-        videos.append({
-            "bvid": bvid,
-            "title": media.get("title") or "无标题视频",
-            "cover": media.get("cover") or "",
-            "duration": media.get("duration") or 0,
-            "uploader": (media.get("upper") or {}).get("name") or "",
-            "video_url": f"https://www.bilibili.com/video/{bvid}",
-        })
+        page_count = _page_count(media)
+        page_titles = _get_page_titles(media["bvid"], headers) if page_count > 1 and media.get("bvid") else {}
+        videos.extend(_expand_media(media, page_titles))
 
     media_count = int(info.get("media_count") or 0)
     return R.success(data={

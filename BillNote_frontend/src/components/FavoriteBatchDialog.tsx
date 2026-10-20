@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import { getBatchTaskStatus, getBilibiliFavoritePage, type FavoriteVideo } from '@/services/favorites'
 import { generateNote, type GenerateNotePayload } from '@/services/note'
-import { useTaskStore, type FavoriteFolderInfo } from '@/store/taskStore'
+import { useTaskStore, type FavoriteFolderInfo, type FavoriteVideoInfo } from '@/store/taskStore'
 
 const STORAGE_KEY = 'bilinote-favorite-batch-v1'
 type BatchState = 'idle' | 'running' | 'paused' | 'done'
@@ -49,6 +49,12 @@ interface FavoriteBatchDialogProps {
 }
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+const getVideoKey = (video: FavoriteVideo) => {
+  if (video.video_key) return video.video_key
+  if ((video.page_count || 1) > 1) return `${video.bvid}_p${video.page_number || 1}`
+  return video.bvid
+}
 
 const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: FavoriteBatchDialogProps) => {
   const addPendingTask = useTaskStore(state => state.addPendingTask)
@@ -131,13 +137,13 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
     setPage(result.page)
     setHasMore(result.has_more)
     setVideos(current => {
-      const existing = new Set(replace ? [] : current.map(video => video.bvid))
-      const incoming = result.videos.filter(video => !existing.has(video.bvid))
+      const existing = new Set(replace ? [] : current.map(getVideoKey))
+      const incoming = result.videos.filter(video => !existing.has(getVideoKey(video)))
       return replace ? result.videos : [...current, ...incoming]
     })
     setSelectedBvids(current => {
       const base = replace ? [] : current
-      return [...new Set([...base, ...result.videos.map(video => video.bvid)])]
+      return [...new Set([...base, ...result.videos.map(getVideoKey)])]
     })
   }
 
@@ -183,8 +189,8 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
     }
   }
 
-  const updateVideo = (bvid: string, update: Partial<FavoriteVideo>) => {
-    setVideos(current => current.map(video => video.bvid === bvid ? { ...video, ...update } : video))
+  const updateVideo = (videoKey: string, update: Partial<FavoriteVideo>) => {
+    setVideos(current => current.map(video => getVideoKey(video) === videoKey ? { ...video, ...update } : video))
   }
 
   const runBatch = async (
@@ -206,13 +212,13 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
         return
       }
 
-      const video = videosRef.current.find(item => item.bvid === items[index].bvid) || items[index]
+      const video = videosRef.current.find(item => getVideoKey(item) === getVideoKey(items[index])) || items[index]
       if (video.status === 'success' || video.status === 'failed') {
         setNextIndex(index + 1)
         continue
       }
 
-      updateVideo(video.bvid, { status: 'running', error: undefined })
+      updateVideo(getVideoKey(video), { status: 'running', error: undefined })
       let taskId = video.task_id
       if (!taskId) {
         try {
@@ -225,12 +231,18 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
           const response = await generateNote(payload, { silent: true })
           taskId = response?.task_id
           if (!taskId) throw new Error('后端没有返回任务编号')
-          addPendingTask(taskId, 'bilibili', payload, favoriteFolder)
-          updateVideo(video.bvid, { task_id: taskId })
+          const favoriteVideo: FavoriteVideoInfo = {
+            bvid: video.bvid,
+            title: video.title,
+            page_number: video.page_number,
+            page_count: video.page_count,
+          }
+          addPendingTask(taskId, 'bilibili', payload, favoriteFolder, favoriteVideo)
+          updateVideo(getVideoKey(video), { task_id: taskId })
         } catch (cause: unknown) {
           const failure = cause as BatchError
           if (failure?.data?.reason === 'transcriber_model_not_ready') {
-            updateVideo(video.bvid, { status: undefined, error: undefined })
+            updateVideo(getVideoKey(video), { status: undefined, error: undefined })
             setNextIndex(index)
             setBatchState('paused')
             setPauseRequested(false)
@@ -239,7 +251,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
               : '当前转写模型尚未下载，请先到「设置 → 音频转写配置」下载模型。')
             return
           }
-          updateVideo(video.bvid, {
+          updateVideo(getVideoKey(video), {
             status: 'failed',
             error: failure?.msg || failure?.message || '提交任务失败',
           })
@@ -252,12 +264,12 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
         try {
           const status = await getBatchTaskStatus(taskId)
           if (status.status === 'SUCCESS') {
-            updateVideo(video.bvid, { status: 'success', error: undefined })
+            updateVideo(getVideoKey(video), { status: 'success', error: undefined })
             setNextIndex(index + 1)
             break
           }
           if (status.status === 'FAILED') {
-            updateVideo(video.bvid, {
+            updateVideo(getVideoKey(video), {
               status: 'failed',
               error: status.message || '笔记生成失败',
             })
@@ -268,7 +280,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
         } catch (cause: unknown) {
           const failure = cause as BatchError
           if (failure?.code === 500) {
-            updateVideo(video.bvid, {
+            updateVideo(getVideoKey(video), {
               status: 'failed',
               error: failure?.msg || '笔记生成失败',
             })
@@ -290,7 +302,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
   }
 
   const startBatch = () => {
-    const items = videos.filter(video => selectedBvids.includes(video.bvid))
+    const items = videos.filter(video => selectedBvids.includes(getVideoKey(video)))
     if (hasMore) {
       setError('请先加载完整个收藏夹，再开始批量生成')
       return
@@ -312,7 +324,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
 
   const resumeBatch = () => {
     if (!batchConfig) return
-    const items = videos.filter(video => selectedBvids.includes(video.bvid))
+    const items = videos.filter(video => selectedBvids.includes(getVideoKey(video)))
     if (items.length === 0) {
       setError('没有可继续的已选视频')
       return
@@ -325,11 +337,11 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
   }
 
   const retryFailed = () => {
-    const selectedVideos = videos.filter(video => selectedBvids.includes(video.bvid))
+    const selectedVideos = videos.filter(video => selectedBvids.includes(getVideoKey(video)))
     const firstFailedIndex = selectedVideos.findIndex(video => video.status === 'failed')
     if (firstFailedIndex < 0) return
 
-    const resetVideos = videos.map(video => selectedBvids.includes(video.bvid) && video.status === 'failed'
+    const resetVideos = videos.map(video => selectedBvids.includes(getVideoKey(video)) && video.status === 'failed'
       ? { ...video, status: undefined, task_id: undefined, error: undefined }
       : video)
     setVideos(resetVideos)
@@ -361,20 +373,20 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
     localStorage.removeItem(STORAGE_KEY)
   }
 
-  const toggleVideo = (bvid: string) => {
-    setSelectedBvids(current => current.includes(bvid)
-      ? current.filter(item => item !== bvid)
-      : [...current, bvid])
+  const toggleVideo = (videoKey: string) => {
+    setSelectedBvids(current => current.includes(videoKey)
+      ? current.filter(item => item !== videoKey)
+      : [...current, videoKey])
   }
 
   const toggleAll = () => {
-    setSelectedBvids(current => current.length === videos.length ? [] : videos.map(video => video.bvid))
+    setSelectedBvids(current => current.length === videos.length ? [] : videos.map(getVideoKey))
   }
 
   const finishedCount = videos.filter(video =>
-    selectedBvids.includes(video.bvid) && (video.status === 'success' || video.status === 'failed')
+    selectedBvids.includes(getVideoKey(video)) && (video.status === 'success' || video.status === 'failed')
   ).length
-  const selectedCount = videos.filter(video => selectedBvids.includes(video.bvid)).length
+  const selectedCount = videos.filter(video => selectedBvids.includes(getVideoKey(video))).length
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -385,7 +397,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
             Bilibili 收藏夹批量生成
           </DialogTitle>
           <DialogDescription>
-            使用设置中保存的 Bilibili Cookie 读取私有收藏夹；批量任务复用当前笔记配置并逐个执行。
+            使用设置中保存的 Bilibili Cookie 读取私有收藏夹；多 P 视频会展开为独立任务，批量任务复用当前笔记配置并逐个执行。
           </DialogDescription>
         </DialogHeader>
 
@@ -415,7 +427,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
               <div className="min-w-0">
                 <span className="font-medium">{favoriteTitle}</span>
                 <span className="ml-2 text-muted-foreground">
-                  已载入 {videos.length} / {total}，已选 {selectedCount}
+                  已载入 {videos.length} 个视频/分P · 收藏项 {total} · 已选 {selectedCount}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -433,13 +445,13 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
             <ScrollArea className="min-h-0 flex-1 rounded border">
               <div className="divide-y">
                 {videos.map(video => (
-                  <label key={video.bvid} className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-muted/50">
+                  <label key={getVideoKey(video)} className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-muted/50">
                     <input
                       type="checkbox"
                       className="h-4 w-4 shrink-0 accent-primary"
-                      checked={selectedBvids.includes(video.bvid)}
+                      checked={selectedBvids.includes(getVideoKey(video))}
                       disabled={batchConfig !== null || batchState === 'running' || video.status === 'success' || video.status === 'failed'}
-                      onChange={() => toggleVideo(video.bvid)}
+                      onChange={() => toggleVideo(getVideoKey(video))}
                     />
                     {video.cover ? (
                       <img src={video.cover} alt="" loading="lazy" className="h-10 w-16 shrink-0 rounded object-cover" />
@@ -488,7 +500,7 @@ const FavoriteBatchDialog = ({ open, onOpenChange, getGenerationConfig }: Favori
                       : <Pause className="h-4 w-4" />}
                     {pauseRequested ? '正在暂停…' : '暂停'}
                   </Button>
-                ) : batchState === 'done' && videos.some(video => selectedBvids.includes(video.bvid) && video.status === 'failed') ? (
+                ) : batchState === 'done' && videos.some(video => selectedBvids.includes(getVideoKey(video)) && video.status === 'failed') ? (
                   <Button type="button" variant="outline" onClick={retryFailed}>
                     重试失败项
                   </Button>

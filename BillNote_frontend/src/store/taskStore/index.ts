@@ -45,6 +45,13 @@ export interface FavoriteFolderInfo {
   url: string
 }
 
+export interface FavoriteVideoInfo {
+  bvid: string
+  title: string
+  page_number?: number
+  page_count?: number
+}
+
 export interface Task {
   id: string
   markdown: string|Markdown [] //为了兼容之前的笔记
@@ -53,6 +60,7 @@ export interface Task {
   audioMeta: AudioMeta
   createdAt: string
   favoriteFolder?: FavoriteFolderInfo
+  favoriteVideo?: FavoriteVideoInfo
   formData: {
     video_url: string
     link?: boolean
@@ -79,6 +87,7 @@ interface TaskStore {
     platform: string,
     formData: Task['formData'],
     favoriteFolder?: FavoriteFolderInfo,
+    favoriteVideo?: FavoriteVideoInfo,
   ) => void
   updateTaskContent: (id: string, data: Partial<Omit<Task, 'id' | 'createdAt'>>) => void
   removeTask: (id: string) => void
@@ -94,7 +103,7 @@ export const useTaskStore = create<TaskStore>()(
       tasks: [],
       currentTaskId: null,
 
-      addPendingTask: (taskId, platform, formData, favoriteFolder) =>
+      addPendingTask: (taskId, platform, formData, favoriteFolder, favoriteVideo) =>
 
         set(state => ({
           tasks: [
@@ -105,6 +114,7 @@ export const useTaskStore = create<TaskStore>()(
               markdown: '',
               platform: platform,
               ...(favoriteFolder ? { favoriteFolder } : {}),
+              ...(favoriteVideo ? { favoriteVideo } : {}),
               transcript: {
                 full_text: '',
                 language: '',

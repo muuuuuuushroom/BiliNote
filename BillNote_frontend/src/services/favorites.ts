@@ -2,11 +2,14 @@ import request from '@/utils/request'
 
 export interface FavoriteVideo {
   bvid: string
+  video_key?: string
   title: string
   cover: string
   duration: number
   uploader: string
   video_url: string
+  page_number?: number
+  page_count?: number
   status?: 'queued' | 'running' | 'success' | 'failed'
   task_id?: string
   error?: string

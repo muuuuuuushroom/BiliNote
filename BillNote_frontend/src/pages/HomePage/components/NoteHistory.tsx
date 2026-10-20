@@ -131,7 +131,7 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
 
       selectedExportTasks.forEach(task => {
         const folderName = safePathSegment(task.favoriteFolder?.title || '普通任务')
-        const baseName = safePathSegment(task.audioMeta.title || `笔记-${task.id.slice(0, 8)}`)
+        const baseName = safePathSegment(task.favoriteVideo?.title || task.audioMeta.title || `笔记-${task.id.slice(0, 8)}`)
         let fileName = baseName
         let suffix = 2
         let path = `${folderName}/${fileName}.md`
