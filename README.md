@@ -276,7 +276,7 @@ mv .env.example .env
 ```bash
 cd backend
 pip install -r requirements.txt
-python main.py
+bash run.sh
 ```
 
 #### 3. 启动前端（Vite + React）
