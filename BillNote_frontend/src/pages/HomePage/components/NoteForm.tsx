@@ -7,7 +7,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form.tsx'
-import { useEffect,useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -137,6 +137,8 @@ const NoteForm = () => {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadSuccess, setUploadSuccess] = useState(false)
   const [favoriteBatchOpen, setFavoriteBatchOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   /* ---- 全局状态 ---- */
   const { addPendingTask, currentTaskId, setCurrentTask, getCurrentTask, retryTask } =
     useTaskStore()
@@ -246,27 +248,31 @@ const NoteForm = () => {
 
   const onSubmit = async (values: NoteFormValues) => {
     console.log('Not even go here')
+    if (submittingRef.current) return
+
     const selectedModel = modelList.find(model => model.model_name === values.model_name)
     if (!selectedModel?.provider_id) {
       toast.error('请先选择有效的模型提供者')
       return
     }
-    const payload: GenerateNotePayload = {
-      ...values,
-      video_url:
-        values.platform === 'local' ? values.video_url || '' : withScheme(values.video_url || ''),
-      provider_id: selectedModel.provider_id,
-      task_id: currentTaskId || '',
-      format: values.format ?? [],
-      grid_size: values.grid_size ?? [2, 2],
-    }
-    if (currentTaskId) {
-      retryTask(currentTaskId, payload)
-      return
-    }
 
-    // message.success('已提交任务')
+    submittingRef.current = true
+    setIsSubmitting(true)
     try {
+      const payload: GenerateNotePayload = {
+        ...values,
+        video_url:
+          values.platform === 'local' ? values.video_url || '' : withScheme(values.video_url || ''),
+        provider_id: selectedModel.provider_id,
+        task_id: currentTaskId || '',
+        format: values.format ?? [],
+        grid_size: values.grid_size ?? [2, 2],
+      }
+      if (currentTaskId) {
+        await retryTask(currentTaskId, payload)
+        return
+      }
+
       const data = await generateNote(payload)
       addPendingTask(data.task_id, values.platform, payload)
     } catch (e: unknown) {
@@ -285,6 +291,9 @@ const NoteForm = () => {
       }
       // 其余错误：axios 拦截器已经弹过 toast，这里只兜底不让 promise 变成未处理 rejection
       console.error('提交任务失败：', e)
+    } finally {
+      submittingRef.current = false
+      setIsSubmitting(false)
     }
   }
   const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
@@ -297,14 +306,14 @@ const NoteForm = () => {
     setCurrentTask(null)
   }
   const FormButton = () => {
-    const label = generating ? '正在生成…' : editing ? '重新生成' : '生成笔记'
+    const label = generating ? '正在生成…' : isSubmitting ? '正在提交…' : editing ? '重新生成' : '生成笔记'
 
     return (
       <div className="flex gap-2">
         <Button
           type="submit"
           className={!editing ? 'w-full' : 'w-2/3' + ' bg-primary'}
-          disabled={generating}
+          disabled={generating || isSubmitting}
         >
           {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {label}
